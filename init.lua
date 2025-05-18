@@ -228,6 +228,26 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   end,
 })
 
+local ignore_registers = { '_', '+' }
+vim.api.nvim_create_autocmd('TextYankPost', {
+  pattern = '*',
+  group = vim.api.nvim_create_augroup('ClipboardYank', { clear = true }),
+  desc = 'Yank to clipboard',
+  callback = function()
+    if vim.tbl_contains(ignore_registers, vim.v.register) then
+      return
+    end
+    if vim.v.operator ~= 'y' then
+      return
+    end
+
+    local value = vim.fn.getreg(vim.v.register, 1)
+    local type = vim.fn.getregtype(vim.v.register)
+    vim.fn.setreg('+', value, type)
+    vim.fn.setreg('p', value, type)
+  end,
+})
+
 -- [[ Install `lazy.nvim` plugin manager ]]
 --    See `:help lazy.nvim.txt` or https://github.com/folke/lazy.nvim for more info
 local lazypath = vim.fn.stdpath 'data' .. '/lazy/lazy.nvim'
@@ -496,6 +516,17 @@ require('lazy').setup({
   },
   {
     'Olical/conjure',
+    init = function()
+      vim.g['conjure#extract#tree_sitter#enabled'] = true
+
+      vim.g['conjure#client#clojure#nrepl#eval#raw_out'] = true
+      vim.g['conjure#client#clojure#nrepl#connection#auto_repl#enabled'] = false
+      vim.g['conjure#log#wrap'] = true
+      vim.g['conjure#client#clojure#nrepl#eval#auto_require'] = true
+
+      -- vim.g['conjure#mapping#doc_word'] = false
+      -- vim.g['conjure#mapping#log_jump_to_latest'] = false
+    end,
   },
   {
     'nvim-neo-tree/neo-tree.nvim',
@@ -516,7 +547,44 @@ require('lazy').setup({
   {
     'windwp/nvim-autopairs',
     event = 'InsertEnter',
-    config = true,
+    config = function()
+      local Rule = require 'nvim-autopairs.rule'
+      local pairs = require 'nvim-autopairs'
+
+      pairs.setup {
+        check_ts = true,
+        enable_check_bracket_line = false,
+      }
+
+      pairs.get_rules('`')[1].not_filetypes = { 'clojure' }
+      pairs.get_rules("'")[1].not_filetypes = { 'clojure', 'rust' }
+
+      -- local type_def_rule = Rule("<", ">", { "typescript", "rust" })
+      --   :with_del(function(opts)
+      --     -- This deletes the pair if `<` is pressed twice
+      --     local line = opts.line
+      --     local col = opts.col
+      --     if col > 1 and line:sub(col - 1, col - 1) == "<" then
+      --       return true
+      --     end
+      --     return false
+      --   end)
+      --   :with_move(function(opts)
+      --     return opts.char == ">"
+      --   end)
+      --   :with_pair(function(opts)
+      --     -- This checks if the character before the cursor is also `<`
+      --     local line = opts.line
+      --     local col = opts.col
+      --     return not (col > 1 and line:sub(col - 1, col - 1) == "<")
+      --   end)
+      --
+      -- pairs.add_rule(type_def_rule)
+
+      -- pairs.add_rule(Rule("<", ">", { "typescript", "rust" }):with_move(function(opts)
+      --   return opts.char == ">"
+      -- end))
+    end,
   },
   {
     -- Main LSP Configuration
@@ -1001,6 +1069,70 @@ require('lazy').setup({
     --    - Show your current context: https://github.com/nvim-treesitter/nvim-treesitter-context
     --    - Treesitter + textobjects: https://github.com/nvim-treesitter/nvim-treesitter-textobjects
   },
+  {
+    'nvim-lualine/lualine.nvim',
+    dependencies = { 'nvim-tree/nvim-web-devicons' },
+    config = function()
+      require('lualine').setup {
+        {
+          lualine_a = {
+            {
+              'mode',
+              separator = { left = '', right = '' },
+              padding = { left = 1, right = 0 },
+            },
+          },
+          lualine_b = {
+            { 'branch' },
+          },
+          lualine_c = {
+            { '%=', padding = 0 },
+            {
+              'datetime',
+              style = '%H:%M ',
+              separator = { left = '', right = '' },
+              padding = 0,
+              color = function()
+                local mode = require('local.theme').get_mode()
+
+                return 'lualine_a_' .. mode
+              end,
+            },
+          },
+          lualine_x = {},
+          lualine_y = {
+            {
+              'filetype',
+              fmt = function(name)
+                return string.upper(name)
+              end,
+            },
+          },
+          lualine_z = {
+            {
+              function()
+                local lnum, col = unpack(vim.api.nvim_win_get_cursor(0))
+                local max_lnum = vim.api.nvim_buf_line_count(0)
+
+                local ruler
+                if lnum == 1 then
+                  ruler = 'TOP'
+                elseif lnum == max_lnum then
+                  ruler = 'BOT'
+                else
+                  ruler = string.format('%2d%%%%', math.floor(100 * lnum / max_lnum))
+                end
+
+                return string.format('%' .. string.len(vim.bo.textwidth) .. 'd %s', col + 1, ruler)
+              end,
+              separator = { left = '', right = '' },
+              padding = { left = 0, right = 1 },
+            },
+          },
+        },
+      }
+    end,
+  },
 
   -- The following comments only work if you have downloaded the kickstart repo, not just copy pasted the
   -- init.lua. If you want these files, they are in the repository, so you can just download them and
@@ -1049,6 +1181,24 @@ require('lazy').setup({
     },
   },
 })
+
+vim.keymap.set('n', '<C-b>', function()
+  local manager = require 'neo-tree.sources.manager'
+  local renderer = require 'neo-tree.ui.renderer'
+
+  local state = manager.get_state 'filesystem'
+  local window_exists = renderer.window_exists(state)
+
+  if window_exists then
+    vim.cmd 'Neotree close'
+  else
+    vim.cmd 'Neotree show'
+  end
+end)
+
+vim.keymap.set('n', '<C-,>', '<Esc><Cmd>ConjureLogVSplit<CR>')
+vim.keymap.set('n', '<C-c><C-c>', '<Esc><Cmd>ConjureCljConnectPortFile<CR>')
+vim.keymap.set('n', '<C-c><C-d>', '<Esc><Cmd>ConjureCljDisconnect<CR>')
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
